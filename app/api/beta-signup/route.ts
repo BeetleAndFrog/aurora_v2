@@ -1,22 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { Resend } from 'resend'
 import prisma from '@/lib/prisma'
-import crypto from 'crypto'
-import { hashInviteToken, normalizeEmail } from '@/lib/betaAccess'
+import { normalizeEmail } from '@/lib/betaAccess'
+import { buildInviteLink, computeTransitionDeltas, sendInviteEmail } from '@/lib/betaAdmin'
 import { evalRateLimit, getClientIp } from '@/lib/rateLimit'
 
 const webOrigin = process.env.NEXT_PUBLIC_WEB_URL ?? '*'
-
-// Lazy-initialize Resend. Instantiated only inside the handler when a key is
-// actually present, so the build / page-data collection never depends on
-// RESEND_API_KEY being set at module load.
-let resend: Resend | null = null
-function getResend(): Resend | null {
-  if (!resend && process.env.RESEND_API_KEY) {
-    resend = new Resend(process.env.RESEND_API_KEY)
-  }
-  return resend
-}
 
 export async function OPTIONS() {
   return new NextResponse(null, {
@@ -60,45 +48,47 @@ export async function POST(request: NextRequest) {
     // Generic response on duplicates — no 409 tell that reveals whether an
     // email already applied (BETA-09 acceptance: no email enumeration). No
     // email is sent, so a pre-existing applicant is not re-contacted either.
-    return NextResponse.json({ ok: true, status: 'pending' }, {
+    return NextResponse.json({ ok: true, status: 'approved' }, {
       headers: { 'Access-Control-Allow-Origin': webOrigin },
     })
   }
 
-  // New applications are created in `pending` state and require manual operator
-  // approval (DEC-01). The raw invite token is never stored: only its SHA-256
-  // hash, so a database leak cannot mint usable invite links. The invite is
-  // bound to the normalized applicant email via `invitedEmail`.
-  const inviteToken = crypto.randomBytes(32).toString('hex')
-  const inviteExpires = new Date(Date.now() + 72 * 60 * 60 * 1000)
+  // DEC-04: moderation is reactive, not proactive — new applications are
+  // auto-approved on creation instead of waiting on manual operator review
+  // (superseding DEC-01). An operator can still revoke a signup after the
+  // fact via /admin if it turns out to be spam/abuse. Reuse the same
+  // pending->approved transition an operator's manual approve would have
+  // produced, so a fresh signup is byte-for-byte what a pending row looked
+  // like immediately after approval: fresh invite token/hash/expiry bound to
+  // the applicant email via `invitedEmail`. The raw token is never stored:
+  // only its SHA-256 hash, so a database leak cannot mint usable invite links.
+  const deltas = computeTransitionDeltas('approve', {
+    status: 'pending',
+    email: normalizedEmail,
+    invitedEmail: normalizedEmail,
+  })
 
   await prisma.betaSignup.create({
     data: {
       email: normalizedEmail,
       learningGoal,
-      invitedEmail: normalizedEmail,
-      inviteTokenHash: hashInviteToken(inviteToken),
-      inviteExpires,
+      ...deltas.data,
     },
   })
 
-  // BETA-03 P1 fix: no invite link is issued yet. Applications start in
-  // `pending` and require operator approval (DEC-01); handing out a usable
-  // invite link now would be a dead-end trap telling applicants they are "in"
-  // when access is still gated on approval. Respond with an honest
-  // pending-review notice instead. Operator approval is BETA-14; redemption is
-  // BETA-04. The raw invite token is never logged, emailed, or persisted.
-  const resendClient = getResend()
-  if (resendClient) {
-    await resendClient.emails.send({
-      from: 'Astryon <noreply@astryon.com>',
+  // Auto-approval means there's no later manual-approve step to send the
+  // invite email from, so send it here instead — same invite email the
+  // admin approve action sends (lib/betaAdmin.ts sendInviteEmail). Best
+  // effort: a transient send failure doesn't roll back the already-committed
+  // approval; the operator can re-invite from /admin.
+  if (deltas.emailToken) {
+    await sendInviteEmail({
       to: normalizedEmail,
-      subject: 'Astryon beta application received',
-      html: `<p>We've received your application for the Astryon beta.</p><p>Your application is pending review. We'll email you with next steps once your access is approved.</p>`,
+      inviteLink: buildInviteLink(deltas.emailToken),
     })
   }
 
-  return NextResponse.json({ ok: true, status: 'pending' }, {
+  return NextResponse.json({ ok: true, status: 'approved' }, {
     headers: { 'Access-Control-Allow-Origin': webOrigin },
   })
 }
