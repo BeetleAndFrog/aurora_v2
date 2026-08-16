@@ -1,142 +1,52 @@
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser } from '@/lib/authz';
 import { parseBoundedJson } from '@/lib/requestBound';
 import { evalRateLimit } from '@/lib/rateLimit';
 import { callGeminiFlash } from '@/lib/gemini';
 import { searchWeb } from '@/lib/search';
+import { callUserModel, type CallUserModelParams, type UserModelConfig } from '@/lib/callUserModel';
+import { decryptApiKey } from '@/lib/modelConfigCrypto';
+import prisma from '@/lib/prisma';
 
 export const maxDuration = 300;
 
-const MODEL_CONFIG = {
-  high: { anthropic: 'claude-opus-4-7', openai: 'gpt-4o' },
-  mid: { anthropic: 'claude-sonnet-4-6', openai: 'gpt-4o' },
-  low: { anthropic: 'claude-haiku-4-5', openai: 'gpt-4o-mini' },
-};
-
-async function safeAICall(anthropic: Anthropic, openai: OpenAI, params: any, complexity: 'high' | 'mid' | 'low' = 'mid') {
-  const modelToUse = MODEL_CONFIG[complexity];
-
-  // Cache the system prompt — stable across requests in each mode, so repeat
-  // calls with the same mode read instead of re-paying full input cost.
-  // Silently no-ops when the prefix is below the model's cache minimum.
-  const systemBlocks = typeof params.system === 'string'
-    ? [{ type: 'text' as const, text: params.system, cache_control: { type: 'ephemeral' as const } }]
-    : params.system;
-
-  const currentParams = { ...params, system: systemBlocks, model: modelToUse.anthropic };
-
-  if (process.env.ANTHROPIC_API_KEY) {
-    try {
-      console.log(`🤖 Attempting Anthropic call (${complexity} tier: ${modelToUse.anthropic})...`);
-      const response = await anthropic.messages.create(currentParams);
-      if (response.usage) {
-        console.log(`💾 Cache: read=${response.usage.cache_read_input_tokens ?? 0} write=${response.usage.cache_creation_input_tokens ?? 0} input=${response.usage.input_tokens} output=${response.usage.output_tokens}`);
-      }
-      return response;
-    } catch (error: any) {
-      console.error('❌ Anthropic failed:', error.message);
-      if (!process.env.OPENAI_API_KEY) throw error;
-      console.log(`🔄 Fallback condition met, switching to OpenAI (${modelToUse.openai})...`);
-    }
-  }
-
-  if (process.env.OPENAI_API_KEY) {
-    console.log(`🚀 Executing OpenAI fallback (${modelToUse.openai})...`);
-    const completion = await openai.chat.completions.create({
-      model: modelToUse.openai,
-      messages: [
-        ...(params.system ? [{ role: "system", content: params.system }] : []),
-        ...params.messages
-      ],
-      max_tokens: params.max_tokens,
-      temperature: params.temperature || 0.7,
-    });
-
-    return {
-      content: [{ type: 'text', text: completion.choices[0].message.content || '' }]
-    };
-  }
-
-  throw new Error('No valid AI provider key available');
-}
-
-function buildAnthropicParams(params: any, complexity: 'high' | 'mid' | 'low' = 'mid') {
-  const modelToUse = MODEL_CONFIG[complexity];
-  const systemBlocks = typeof params.system === 'string'
-    ? [{ type: 'text' as const, text: params.system, cache_control: { type: 'ephemeral' as const } }]
-    : params.system;
-
-  return { ...params, system: systemBlocks, model: modelToUse.anthropic };
-}
-
-function getOpenAISystemContent(system: any) {
-  if (!system) return '';
-  if (typeof system === 'string') return system;
-  if (Array.isArray(system)) {
-    return system.map((block) => block?.text || '').filter(Boolean).join('\n\n');
-  }
-  return String(system);
-}
-
-function streamAICall(anthropic: Anthropic, openai: OpenAI, params: any, complexity: 'high' | 'mid' | 'low' = 'mid') {
+/** Wraps callUserModel's streaming path in the same ReadableStream/controller shape every stream call site already expects. */
+function streamUserModel(modelConfig: UserModelConfig, params: CallUserModelParams): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
-  const modelToUse = MODEL_CONFIG[complexity];
 
   return new ReadableStream({
     async start(controller) {
       try {
-        if (process.env.ANTHROPIC_API_KEY) {
-          try {
-            console.log(`🌊 Streaming Anthropic response (${complexity} tier: ${modelToUse.anthropic})...`);
-            const stream = anthropic.messages.stream(buildAnthropicParams(params, complexity));
-
-            for await (const event of stream as any) {
-              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
-                controller.enqueue(encoder.encode(event.delta.text));
-              }
-            }
-
-            controller.close();
-            return;
-          } catch (error: any) {
-            console.error('❌ Anthropic stream failed:', error.message);
-            if (!process.env.OPENAI_API_KEY) throw error;
-            console.log(`🔄 Streaming fallback to OpenAI (${modelToUse.openai})...`);
-          }
+        const chunks = await callUserModel(modelConfig, params, { stream: true });
+        for await (const text of chunks) {
+          controller.enqueue(encoder.encode(text));
         }
-
-        if (process.env.OPENAI_API_KEY) {
-          const systemContent = getOpenAISystemContent(params.system);
-          const completion = await openai.chat.completions.create({
-            model: modelToUse.openai,
-            messages: [
-              ...(systemContent ? [{ role: 'system' as const, content: systemContent }] : []),
-              ...params.messages,
-            ],
-            max_tokens: params.max_tokens,
-            temperature: params.temperature || 0.7,
-            stream: true,
-          });
-
-          for await (const chunk of completion) {
-            const text = chunk.choices[0]?.delta?.content || '';
-            if (text) {
-              controller.enqueue(encoder.encode(text));
-            }
-          }
-
-          controller.close();
-          return;
-        }
-
-        throw new Error('No valid AI provider key available');
+        controller.close();
       } catch (error: any) {
         controller.error(error);
       }
     },
   });
+}
+
+/**
+ * Map a session user id to a DB user id. The session JWT may carry the id
+ * directly; fall back to email lookup to stay compatible with BETA-02.
+ * (Mirrors app/api/upload/route.ts's userIdForSession.)
+ */
+async function userIdForSession(
+  sessionUserId: string | null | undefined,
+  sessionEmail: string | null | undefined
+): Promise<string | null> {
+  if (sessionUserId) {
+    const byId = await prisma.user.findUnique({ where: { id: sessionUserId } });
+    if (byId) return byId.id;
+  }
+  if (sessionEmail) {
+    const byEmail = await prisma.user.findUnique({ where: { email: sessionEmail } });
+    if (byEmail) return byEmail.id;
+  }
+  return null;
 }
 
 // BETA-09/DEC-03: per-user daily AI budget, enforced BEFORE any provider call
@@ -148,6 +58,25 @@ const AI_DAILY_WINDOW_SECONDS = 24 * 60 * 60;
 export async function POST(request: NextRequest) {
   const { user, response } = await requireUser();
   if (response) return response;
+
+  // BYOK mandatory gate (belt-and-suspenders alongside the middleware-level
+  // redirect gate): JWT claims can go stale between a save and token
+  // refresh, so re-check the DB directly before spending any provider call.
+  const dbUserId = await userIdForSession(user.id, user.email);
+  const modelConfigRow = dbUserId
+    ? await prisma.modelConfig.findUnique({ where: { userId: dbUserId } })
+    : null;
+  if (!modelConfigRow) {
+    return NextResponse.json(
+      { error: 'No model configured. Add your API key in Settings.' },
+      { status: 400 }
+    );
+  }
+  const userModelConfig: UserModelConfig = {
+    baseUrl: modelConfigRow.baseUrl,
+    model: modelConfigRow.model,
+    apiKey: await decryptApiKey(modelConfigRow.apiKeyCiphertext, modelConfigRow.apiKeyIv),
+  };
 
   const budgetKey = `rl:chat:user:${user.id ?? user.email ?? 'unknown'}`;
   const budget = await evalRateLimit(budgetKey, AI_DAILY_LIMIT, AI_DAILY_WINDOW_SECONDS);
@@ -164,23 +93,6 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Force rebuild
-    if (!process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY) {
-      console.error('❌ No API keys defined');
-      return NextResponse.json(
-        { error: 'API key not configured' },
-        { status: 500 }
-      );
-    }
-
-    const anthropic = new Anthropic({
-      apiKey: process.env.ANTHROPIC_API_KEY || 'missing',
-    });
-
-    const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY || '',
-    });
-
     const parsed = await parseBoundedJson(request);
     if (!parsed.ok) {
       return NextResponse.json({ error: parsed.error }, { status: parsed.status });
@@ -450,12 +362,12 @@ IMPORTANT:
 
       console.log('📤 Sending spatial universe generation prompt...');
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 16384, // Large enough for atomized children with quiz diversity
         system: 'You are Astryon AI, a structured learning architect. Generate learning universes organized into core concepts. Always return ONLY valid JSON with properly escaped newlines (\\n).',
         messages: [{ role: 'user', content: spatialPrompt }],
-      }, 'mid');
+      });
 
       console.log('✅ Got response from Claude');
 
@@ -592,7 +504,7 @@ IMPORTANT:
 
       console.log('📤 Sending break-off universe generation prompt...');
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 4096,
         system: 'You are Astryon AI, a universe architect. Generate structured spatial knowledge graphs that explore content deeply. Always return ONLY valid JSON with properly escaped newlines (\\n).',
@@ -687,12 +599,12 @@ Question types to use:
 
 CRITICAL: Output ONLY the question, nothing else. No preamble, no explanation.`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 400,
         system: 'You are a Socratic teacher who guides deep exploration through progressively deeper questions. Each question should build on what came before.',
         messages: [{ role: 'user', content: deepThinkingQuestionPrompt }],
-      }, 'high');
+      });
 
       const textContent = response.content.find((block) => block.type === 'text');
       const question = textContent && 'text' in textContent ? textContent.text.trim() : 'Unable to generate question.';
@@ -762,12 +674,12 @@ Format your response exactly like this:
 
 Keep it conversational and Socratic - you're exploring ideas together, not testing them.`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 800,
         system: 'You are a Socratic teacher who engages deeply with student thinking. Build on their insights and guide discovery through thoughtful questions.',
         messages: [{ role: 'user', content: deepThinkingPrompt }],
-      }, 'high');
+      });
 
       const textContent = response.content.find((block) => block.type === 'text');
       const fullResponse = textContent && 'text' in textContent ? textContent.text : 'Unable to continue exploration.';
@@ -851,7 +763,7 @@ Example BAD output:
 
 Now ask your question (QUESTION ONLY, NO ANSWER):`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: hasCompletedCycle ? 500 : 300,  // More tokens for completion message
         system: hasCompletedCycle
@@ -1001,7 +913,7 @@ IMPORTANT:
 
       console.log('📤 Sending MC quiz generation prompt...');
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 6144,
         system: `You are an expert exam question writer creating multiple choice questions with varied difficulty levels (easy, medium, hard). Infer the subject domain from the content provided and tailor questions appropriately. Your questions test understanding through application, with appropriately complex scenarios and clear explanations. Always return questions in the EXACT markdown format requested with NO additional text, introductions, or conversational responses.`,
@@ -1051,7 +963,7 @@ IMPORTANT:
 
       console.log('📤 Sending short answer generation prompt...');
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 4096,
         system: `You are an expert exam question writer creating thoughtful short answer questions for students. You excel at creating questions that test deep understanding and require explanation rather than simple recall. Always return questions in the EXACT markdown format requested with NO additional text, introductions, or conversational responses.`,
@@ -1100,12 +1012,12 @@ Return ONLY valid JSON in this exact format:
 Content to analyze:
 ${userContent}`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 8096,
         system: 'You are an expert educator who analyzes and categorizes academic content across any subject domain. Always return ONLY valid JSON with no additional text.',
         messages: [{ role: 'user', content: analyzePrompt }],
-      }, 'low');
+      });
 
       const rawResponse = response.content[0].type === 'text' ? response.content[0].text : '';
       console.log('🔬 Analysis complete');
@@ -1135,7 +1047,7 @@ Return ONLY valid JSON in this exact format:
   "question": "The full scenario text (3-5 paragraphs)"
 }`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 4096,
         system: 'You are an expert educator creating practice scenarios appropriate to the subject domain. Always return ONLY valid JSON with no additional text.',
@@ -1167,12 +1079,12 @@ Provide constructive feedback that:
 
 Format your feedback in a clear, structured way (but NOT as JSON - just formatted text with paragraphs and bullet points if needed).`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 4096,
         system: 'You are a supportive educator providing detailed, constructive feedback on student analysis. Adapt your tone and terminology to the subject domain.',
         messages: [{ role: 'user', content: gradingPrompt }],
-      }, 'high');
+      });
 
       const rawResponse = response.content[0].type === 'text' ? response.content[0].text : '';
       console.log('🎯 Grading complete');
@@ -1213,7 +1125,7 @@ Return ONLY this exact JSON structure:
 
 Your entire response must be valid, parseable JSON starting with { and ending with }. Nothing else.`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 6000,
         system: 'You are an experienced educator creating comprehensive assessments appropriate to the subject domain. CRITICAL: Your response must be ONLY valid, parseable JSON with no markdown code blocks, no explanation text, and no additional formatting. Start with { and end with }. Nothing else.',
@@ -1246,12 +1158,12 @@ Provide comprehensive feedback that:
 
 Format your feedback in clear, structured paragraphs with headers. Be constructive, specific, and encouraging while maintaining academic rigor.`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 6000,
         system: 'You are an experienced educator providing detailed, constructive feedback on application essays. Adapt your tone and terminology to the subject domain. Your feedback should be thorough, specific, and help students understand both their strengths and areas for improvement.',
         messages: [{ role: 'user', content: gradingPrompt }],
-      }, 'high');
+      });
 
       const rawResponse = response.content[0].type === 'text' ? response.content[0].text : '';
       console.log('📊 Essay graded successfully');
@@ -1279,12 +1191,12 @@ Provide comprehensive feedback that:
 
 Format your feedback in clear, structured paragraphs with headers. Be constructive, specific, and encouraging while maintaining academic rigor.`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 6000,
         system: 'You are an experienced educator providing detailed, constructive feedback on application essays. Adapt your tone and terminology to the subject domain. Your feedback should be thorough, specific, and help students understand both their strengths and areas for improvement.',
         messages: [{ role: 'user', content: gradingPrompt }],
-      }, 'high');
+      });
 
       const rawResponse = response.content[0].type === 'text' ? response.content[0].text : '';
       console.log('📊 Essay graded successfully (basic mode)');
@@ -1324,7 +1236,7 @@ EXAMPLES OF WHAT NOT TO DO:
 
 DO NOT include answer guidance, rubrics, or discussion of issues - ONLY the scenario and question.`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 2048,
         system: 'You are an experienced educator who writes realistic exam questions. Infer the subject domain from the content and tailor your question style accordingly. Your questions always include detailed scenarios that require students to identify issues, apply relevant principles to facts, and analyze outcomes - NOT abstract essays asking students to explain concepts.',
@@ -1375,7 +1287,7 @@ Make the options represent genuinely different perspectives, not just variations
 
 Return ONLY valid JSON, no other text.`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 1024,
         system: 'You are a thoughtful educator who creates engaging questions that help students connect emotionally and personally with the material they are studying. Infer the subject domain from the content and tailor your questions accordingly. Your questions should provoke genuine reflection. Return only valid JSON.',
@@ -1411,7 +1323,7 @@ Return ONLY valid JSON, no other text.`;
 
       const summaryPrompt = `${userMessage}`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 4096,
         system: `You are an expert learning scientist creating personalized "What You've Learned" summaries.
@@ -1427,7 +1339,7 @@ Your task is to synthesize a learning conversation into a comprehensive mastery 
 
 Write in a warm, encouraging tone that celebrates the student's progress while being substantive and specific.`,
         messages: [{ role: 'user', content: summaryPrompt }],
-      }, 'low');
+      });
 
       const masterySummary = response.content[0].type === 'text' ? response.content[0].text : '';
       console.log('✨ Mastery summary generated:', masterySummary.length, 'chars');
@@ -1441,7 +1353,7 @@ Write in a warm, encouraging tone that celebrates the student's progress while b
 
       const labPrompt = `${userMessage}`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 8192,
         system: `You are an expert learning scientist creating personalized Application Labs that help students apply what they've learned.
@@ -1531,7 +1443,7 @@ The Complete Answer:
 
 Would you like another question?`;
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 1000,
         system: 'You are a supportive educator providing quiz feedback. Be encouraging but honest. Always teach what the correct answer is so students learn from their mistakes.',
@@ -1553,7 +1465,7 @@ Would you like another question?`;
     if (mode === 'doctrine') {
       console.log('⚖️ DOCTRINE MODE ACTIVATED - Generating doctrinal map');
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
 
         max_tokens: 4096,
         system: 'You are a legal research assistant. Generate comprehensive doctrinal analysis in valid JSON format with properly escaped newlines (\\n).',
@@ -1593,11 +1505,11 @@ ${webContext}`
         : 'You are Astryon AI, helping users explore ideas in 3D space. You have access to the full conversation universe context.';
 
       if (stream) {
-        return new Response(streamAICall(anthropic, openai, {
+        return new Response(streamUserModel(userModelConfig, {
           max_tokens: 2048,
           system: systemPrompt,
           messages: [{ role: 'user', content: userMessage }],
-        }, 'high'), {
+        }), {
           headers: {
             'Content-Type': 'text/plain; charset=utf-8',
             'Cache-Control': 'no-cache, no-transform',
@@ -1605,11 +1517,11 @@ ${webContext}`
         });
       }
 
-      const response = await safeAICall(anthropic, openai, {
+      const response = await callUserModel(userModelConfig, {
         max_tokens: 2048,
         system: systemPrompt,
         messages: [{ role: 'user', content: userMessage }],
-      }, 'high');
+      });
 
       const textContent = response.content.find((block: any) => block.type === 'text');
       const aiResponse = textContent && 'text' in textContent ? textContent.text : 'No response';
@@ -1628,7 +1540,7 @@ ${webContext}`
       : 'You are Astryon AI, helping users explore ideas in 3D space.';
 
     if (stream) {
-      return new Response(streamAICall(anthropic, openai, {
+      return new Response(streamUserModel(userModelConfig, {
         max_tokens: 2048,
         system: systemMessage,
         messages: [{ role: 'user', content: userMessage }],
@@ -1640,9 +1552,7 @@ ${webContext}`
       });
     }
 
-    console.log('🤖 Using Anthropic Claude');
-
-    const response = await safeAICall(anthropic, openai, {
+    const response = await callUserModel(userModelConfig, {
       max_tokens: 2048,
       system: systemMessage,
       messages: [{ role: 'user', content: userMessage }],

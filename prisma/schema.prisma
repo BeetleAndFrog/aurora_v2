@@ -24,8 +24,27 @@ model User {
   sessions            Session[]
   universes           Universe[]
   uploads             Upload[]
+  modelConfig         ModelConfig?
   createdAt           DateTime   @default(now())
   updatedAt           DateTime   @updatedAt
+}
+
+// BYOK model connect (2026-08-13 design doc): 1:1 per-user bring-your-own-model
+// config. apiKeyCiphertext/apiKeyIv are AES-256-GCM (lib/modelConfigCrypto.ts);
+// the raw key is never stored or re-rendered to the client.
+model ModelConfig {
+  id               String    @id @default(cuid())
+  userId           String    @unique
+  label            String?
+  baseUrl          String
+  model            String
+  apiKeyCiphertext String    @db.Text
+  apiKeyIv         String
+  verifiedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model Account {

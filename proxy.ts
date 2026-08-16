@@ -36,6 +36,21 @@ function isPublicPath(pathname: string): boolean {
   );
 }
 
+/**
+ * BYOK access gate (2026-08-13 design doc): routes exempt from the
+ * "must have a model config" redirect below, distinct from `isPublicPath`
+ * (which controls "no auth needed at all"). `/settings` must stay exempt or a
+ * user with no config could never reach the page that lets them add one;
+ * `/onboard` gates on model config itself in its own UI.
+ */
+const MODEL_CONFIG_EXEMPT_PREFIXES = ['/settings', '/onboard'] as const;
+
+function isModelConfigExempt(pathname: string): boolean {
+  return MODEL_CONFIG_EXEMPT_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -54,6 +69,20 @@ export async function proxy(request: NextRequest) {
     secureCookie: true,
   });
   if (token) {
+    // BYOK mandatory access gate: an authenticated user with no model config
+    // gets funneled to /settings until they add one (design doc, "Access
+    // gate"). Exempt API routes — /api/chat re-checks server-side and returns
+    // an actionable JSON error rather than a redirect a fetch() can't follow.
+    if (
+      !pathname.startsWith('/api/') &&
+      !isModelConfigExempt(pathname) &&
+      !token.hasModelConfig
+    ) {
+      const url = request.nextUrl.clone();
+      url.pathname = '/settings';
+      url.searchParams.set('callbackUrl', pathname);
+      return NextResponse.redirect(url);
+    }
     return NextResponse.next();
   }
 

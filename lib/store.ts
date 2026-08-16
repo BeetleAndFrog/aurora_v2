@@ -55,7 +55,7 @@ if (typeof window !== 'undefined' && process.env.NODE_ENV !== 'production') {
       return parsed;
     },
   };
-  console.log('🔧 Aurora dev debug helpers loaded (non-production only).');
+  console.log('🔧 Astryon dev debug helpers loaded (non-production only).');
 }
 
 type NexusEvolutionState = 'seed' | 'growing' | 'application-lab';
@@ -576,7 +576,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       Object.keys(state.universeLibrary).forEach(id => markUniverseDirty(id));
 
       // 💾 Create backup snapshot every 5 saves (counter scoped per account)
-      const saveCounterKey = `_auroraSaveCount:${getNamespace()}`;
+      const saveCounterKey = `_astryonSaveCount:${getNamespace()}`;
       const saveCounter = (window as any)[saveCounterKey] || 0;
       (window as any)[saveCounterKey] = saveCounter + 1;
       if ((window as any)[saveCounterKey] % 5 === 0) {

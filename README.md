@@ -1,4 +1,4 @@
-# Aurora Portal
+# Astryon Portal
 
 A 3D spatial conversation and knowledge visualization platform built on **Next.js**. Next.js route handlers are the sole production backend; React Three Fiber renders the spatial canvas; Zustand drives state; Prisma + NeonDB persist data.
 

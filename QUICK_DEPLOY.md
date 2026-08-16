@@ -1,4 +1,4 @@
-# Quick Deployment Guide - Aurora Portal
+# Quick Deployment Guide - Astryon Portal
 
 Your code is already pushed to GitHub! Just follow these steps to deploy.
 
@@ -81,7 +81,7 @@ Realtime collaboration is intentionally disabled in production for the beta.
 Send your users:
 
 ```
-🌟 Welcome to Aurora Portal!
+🌟 Welcome to Astryon Portal!
 
 URL: https://your-vercel-url.vercel.app
 Sign-in: [per your configured auth provider]

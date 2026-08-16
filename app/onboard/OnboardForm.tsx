@@ -1,19 +1,35 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import ModelConfigForm from '@/components/ModelConfigForm'
 
 export default function OnboardForm({ defaultName }: { defaultName: string }) {
   const router = useRouter()
   const [form, setForm] = useState({ name: defaultName, school: '', useCase: '', role: 'learner' })
   const [loading, setLoading] = useState(false)
+  // Gates the final submit — set true either by a fresh ModelConfigForm save
+  // in this session, or by the mount-time GET below finding a config already
+  // saved from a prior visit.
+  const [modelConfigured, setModelConfigured] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/model-config')
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (data?.hasConfig) setModelConfigured(true)
+      })
+      .catch(() => {})
+  }, [])
 
   function update(field: string, value: string) {
     setForm(f => ({ ...f, [field]: value }))
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault()
+  async function submit() {
+    // ponytail: no <form> to lean on `required` anymore since ModelConfigForm
+    // needs its own nested <form>; enforce the name field manually instead.
+    if (!form.name.trim() || !modelConfigured) return
     setLoading(true)
     await fetch('/api/user/onboard', {
       method: 'POST',
@@ -28,7 +44,7 @@ export default function OnboardForm({ defaultName }: { defaultName: string }) {
       <div className="w-full max-w-md bg-[#1a1a1a] rounded-2xl border border-gray-800 p-8">
         <h1 className="text-2xl font-bold text-white mb-2">Welcome to Astryon</h1>
         <p className="text-gray-400 mb-8 text-sm">Tell us a bit about yourself.</p>
-        <form onSubmit={submit} className="space-y-4">
+        <div className="space-y-4">
           <input
             required
             value={form.name}
@@ -65,14 +81,26 @@ export default function OnboardForm({ defaultName }: { defaultName: string }) {
               </button>
             ))}
           </div>
+
+          <div className="border-t border-gray-800 pt-4">
+            <h2 className="mb-1 text-sm font-semibold text-white">
+              Connect a model <span className="text-red-400">*</span>
+            </h2>
+            <p className="mb-4 text-xs text-gray-500">
+              Required — Astryon's AI features run on your own model access. OpenRouter has a free tier.
+            </p>
+            <ModelConfigForm onSaved={() => setModelConfigured(true)} />
+          </div>
+
           <button
-            type="submit"
-            disabled={loading}
+            type="button"
+            onClick={submit}
+            disabled={loading || !modelConfigured}
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition-colors"
           >
-            {loading ? 'Setting up…' : 'Get started'}
+            {loading ? 'Setting up…' : modelConfigured ? 'Get started' : 'Connect a model to continue'}
           </button>
-        </form>
+        </div>
       </div>
     </div>
   )

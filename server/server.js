@@ -4,8 +4,16 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
-const Anthropic = require('@anthropic-ai/sdk');
-const OpenAI = require('openai');
+// --- BEGIN DEAD CODE: superseded AI/chat integration (commented out, not deleted) ---
+// Superseded by app/api/chat/route.ts's mandatory per-user bring-your-own-model
+// support (see docs/superpowers/specs/2026-08-13-byok-model-connect-design.md).
+// Kept commented rather than deleted in case Mike wants it reinstated.
+// Verified: every chat fetch() call in the Next.js app targets same-origin
+// /api/chat (app/api/chat/route.ts) — the frontend has never called this
+// Express server's /api/chat endpoint. Only Socket.IO traffic (joinPortal,
+// createNexus, createNode, etc.) still hits this server, on port 3001.
+// const Anthropic = require('@anthropic-ai/sdk');
+// const OpenAI = require('openai');
 
 const app = express();
 const server = http.createServer(app);
@@ -25,13 +33,14 @@ const io = socketIo(server, {
 app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY || 'missing',
-});
+// const anthropic = new Anthropic({
+//   apiKey: process.env.ANTHROPIC_API_KEY || 'missing',
+// });
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || '',
-});
+// const openai = new OpenAI({
+//   apiKey: process.env.OPENAI_API_KEY || '',
+// });
+// --- END DEAD CODE (imports/clients) ---
 
 // In-memory storage
 const portals = {};
@@ -136,88 +145,98 @@ app.delete('/api/conversations/:id', (req, res) => {
   }
 });
 
+// --- BEGIN DEAD CODE: superseded AI/chat integration (commented out, not deleted) ---
+// Superseded by app/api/chat/route.ts's mandatory per-user bring-your-own-model
+// support (see docs/superpowers/specs/2026-08-13-byok-model-connect-design.md).
+// Kept commented rather than deleted in case Mike wants it reinstated.
+// Verified: every chat fetch() call in the Next.js app targets same-origin
+// /api/chat (app/api/chat/route.ts) — the frontend has never called this
+// Express server's /api/chat endpoint. Only Socket.IO traffic (joinPortal,
+// createNexus, createNode, etc.) still hits this server, on port 3001.
+//
 // AI Chat endpoint
-app.post('/api/chat', async (req, res) => {
-  try {
-    const { messages, portalNodes, activeMemories } = req.body;
-
-    let systemPrompt = "You are a helpful assistant in Aurora Portal, a 3D collaborative decision-making space. ";
-
-    if (portalNodes && portalNodes.length > 0) {
-      systemPrompt += "\n\nCurrent nodes and nexuses in the portal:\n";
-      portalNodes.forEach(node => {
-        systemPrompt += `- ${node.label} (${node.type})\n`;
-      });
-    }
-
-    if (activeMemories && activeMemories.length > 0) {
-      systemPrompt += "\n\nActive memories from previous conversations:\n";
-      activeMemories.forEach(memory => {
-        systemPrompt += `\nMemory from ${memory.timestamp}:\n`;
-        memory.messages.forEach(msg => {
-          systemPrompt += `${msg.role}: ${msg.content}\n`;
-        });
-        if (memory.portalNodes && memory.portalNodes.length > 0) {
-          systemPrompt += "Nodes from that conversation:\n";
-          memory.portalNodes.forEach(node => {
-            systemPrompt += `- ${node.label}\n`;
-          });
-        }
-      });
-    }
-
-    let response;
-    try {
-      if (process.env.OPENAI_API_KEY) {
-        console.log('🤖 Attempting OpenAI call (gpt-4o)...');
-        try {
-          const completion = await openai.chat.completions.create({
-            model: "gpt-4o",
-            messages: [
-              { role: "system", content: systemPrompt },
-              ...messages
-            ],
-            max_tokens: 1024,
-          });
-
-          res.json({
-            response: completion.choices[0].message.content
-          });
-          return;
-        } catch (openaiError) {
-          console.error('❌ OpenAI failed:', openaiError.message);
-          // Fall through to Anthropic
-        }
-      }
-
-      console.log('🔄 Trying Anthropic (claude-opus-4-7)...');
-      try {
-        response = await anthropic.messages.create({
-          model: 'claude-opus-4-7',
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: messages
-        });
-
-        res.json({
-          response: response.content[0].text
-        });
-      } catch (anthropicError) {
-        console.error('❌ Anthropic also failed:', anthropicError.message);
-        res.status(500).json({
-          error: 'All AI providers failed',
-          details: anthropicError.message
-        });
-      }
-    } catch (globalError) {
-      console.error('❌ Global chat error:', globalError.message);
-      res.status(500).json({ error: 'Internal server error', details: globalError.message });
-    }
-  } catch (globalError) {
-    console.error('❌ Global chat error:', globalError.message);
-    res.status(500).json({ error: 'Internal server error', details: globalError.message });
-  }
-});
+// app.post('/api/chat', async (req, res) => {
+//   try {
+//     const { messages, portalNodes, activeMemories } = req.body;
+//
+//     let systemPrompt = "You are a helpful assistant in Astryon Portal, a 3D collaborative decision-making space. ";
+//
+//     if (portalNodes && portalNodes.length > 0) {
+//       systemPrompt += "\n\nCurrent nodes and nexuses in the portal:\n";
+//       portalNodes.forEach(node => {
+//         systemPrompt += `- ${node.label} (${node.type})\n`;
+//       });
+//     }
+//
+//     if (activeMemories && activeMemories.length > 0) {
+//       systemPrompt += "\n\nActive memories from previous conversations:\n";
+//       activeMemories.forEach(memory => {
+//         systemPrompt += `\nMemory from ${memory.timestamp}:\n`;
+//         memory.messages.forEach(msg => {
+//           systemPrompt += `${msg.role}: ${msg.content}\n`;
+//         });
+//         if (memory.portalNodes && memory.portalNodes.length > 0) {
+//           systemPrompt += "Nodes from that conversation:\n";
+//           memory.portalNodes.forEach(node => {
+//             systemPrompt += `- ${node.label}\n`;
+//           });
+//         }
+//       });
+//     }
+//
+//     let response;
+//     try {
+//       if (process.env.OPENAI_API_KEY) {
+//         console.log('🤖 Attempting OpenAI call (gpt-4o)...');
+//         try {
+//           const completion = await openai.chat.completions.create({
+//             model: "gpt-4o",
+//             messages: [
+//               { role: "system", content: systemPrompt },
+//               ...messages
+//             ],
+//             max_tokens: 1024,
+//           });
+//
+//           res.json({
+//             response: completion.choices[0].message.content
+//           });
+//           return;
+//         } catch (openaiError) {
+//           console.error('❌ OpenAI failed:', openaiError.message);
+//           // Fall through to Anthropic
+//         }
+//       }
+//
+//       console.log('🔄 Trying Anthropic (claude-opus-4-7)...');
+//       try {
+//         response = await anthropic.messages.create({
+//           model: 'claude-opus-4-7',
+//           max_tokens: 1024,
+//           system: systemPrompt,
+//           messages: messages
+//         });
+//
+//         res.json({
+//           response: response.content[0].text
+//         });
+//       } catch (anthropicError) {
+//         console.error('❌ Anthropic also failed:', anthropicError.message);
+//         res.status(500).json({
+//           error: 'All AI providers failed',
+//           details: anthropicError.message
+//         });
+//       }
+//     } catch (globalError) {
+//       console.error('❌ Global chat error:', globalError.message);
+//       res.status(500).json({ error: 'Internal server error', details: globalError.message });
+//     }
+//   } catch (globalError) {
+//     console.error('❌ Global chat error:', globalError.message);
+//     res.status(500).json({ error: 'Internal server error', details: globalError.message });
+//   }
+// });
+// --- END DEAD CODE: superseded AI/chat integration ---
 
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {

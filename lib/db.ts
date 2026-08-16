@@ -102,7 +102,7 @@ export async function migrateLegacyDexieRecords(): Promise<void> {
   }
 }
 
-class AuroraDatabase extends Dexie {
+class AstryonDatabase extends Dexie {
   universes!: Table<UniverseRecord>;
   backups!: Table<BackupRecord>;
   videos!: Table<VideoFileRecord>;
@@ -118,7 +118,7 @@ class AuroraDatabase extends Dexie {
   }
 }
 
-export const db = new AuroraDatabase();
+export const db = new AstryonDatabase();
 
 // Save universe to IndexedDB
 export async function saveUniverse(id: string, data: any) {

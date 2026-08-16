@@ -775,7 +775,7 @@ export default function MemoriesPage() {
 
             <p style={{ color: '#E5E7EB', marginBottom: '24px' }}>
               Restore your universes from an automatic backup snapshot.
-              Aurora creates backups every 5 saves.
+              Astryon creates backups every 5 saves.
             </p>
 
             {backups.length === 0 ? (

@@ -4,7 +4,7 @@ This document describes the Universe Run lifecycle, Study Guide generation, and 
 
 ## Overview
 
-Aurora tracks user progress through learning content using **Universe Runs**. Each run captures all learning artifacts (intuition responses, quiz results, etc.) and can generate a **Study Guide Write-Up** upon completion. Users can reset and practice again while preserving previous runs and their study guides.
+Astryon tracks user progress through learning content using **Universe Runs**. Each run captures all learning artifacts (intuition responses, quiz results, etc.) and can generate a **Study Guide Write-Up** upon completion. Users can reset and practice again while preserving previous runs and their study guides.
 
 ## Key Concepts
 

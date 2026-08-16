@@ -30,7 +30,7 @@ export default function Home() {
       <div
         className="absolute inset-0 z-0 opacity-40"
         style={{
-          backgroundImage: 'url(/aurora-bg.jpg)',
+          backgroundImage: 'url(/astryon-bg.jpg)',
           backgroundSize: 'cover',
           backgroundPosition: 'center',
         }}

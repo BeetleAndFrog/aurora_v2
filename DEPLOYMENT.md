@@ -1,6 +1,6 @@
-# Aurora Portal - Deployment Guide
+# Astryon Portal - Deployment Guide
 
-This guide covers deploying Aurora Portal for the private beta.
+This guide covers deploying Astryon Portal for the private beta.
 
 ## Architecture
 

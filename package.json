@@ -7,7 +7,7 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "npx tsx lib/__tests__/studyGuideGenerator.test.ts && npx tsx lib/__tests__/universeRunLifecycle.test.ts && npx tsx lib/__tests__/uploadAuth.test.ts && npx tsx lib/__tests__/betaAccess.test.ts && npx tsx lib/__tests__/betaAdmin.test.ts && npx tsx lib/__tests__/betaAdminUi.test.ts && npx tsx lib/__tests__/inviteRedemption.test.ts && npx tsx lib/__tests__/persistenceContext.test.ts && npx tsx lib/__tests__/persistenceContextStore.test.ts && npx tsx lib/__tests__/rateLimit.test.ts && npx tsx lib/__tests__/authz.test.ts && npx tsx lib/__tests__/universeSecurity.test.ts && npx tsx lib/__tests__/universeRoute.test.ts && npx tsx lib/__tests__/acceptanceMatrix.test.ts",
+    "test": "npx tsx lib/__tests__/studyGuideGenerator.test.ts && npx tsx lib/__tests__/universeRunLifecycle.test.ts && npx tsx lib/__tests__/uploadAuth.test.ts && npx tsx lib/__tests__/betaAccess.test.ts && npx tsx lib/__tests__/betaAdmin.test.ts && npx tsx lib/__tests__/betaAdminUi.test.ts && npx tsx lib/__tests__/inviteRedemption.test.ts && npx tsx lib/__tests__/persistenceContext.test.ts && npx tsx lib/__tests__/persistenceContextStore.test.ts && npx tsx lib/__tests__/rateLimit.test.ts && npx tsx lib/__tests__/authz.test.ts && npx tsx lib/__tests__/universeSecurity.test.ts && npx tsx lib/__tests__/universeRoute.test.ts && npx tsx lib/__tests__/acceptanceMatrix.test.ts && npx tsx lib/__tests__/modelConfig.test.ts",
     "test:guide": "npx tsx lib/__tests__/studyGuideGenerator.test.ts",
     "test:lifecycle": "npx tsx lib/__tests__/universeRunLifecycle.test.ts"
   },

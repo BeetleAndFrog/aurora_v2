@@ -1,7 +1,7 @@
 {
   "name": "aurora-server",
   "version": "1.0.0",
-  "description": "Aurora WebSocket Server",
+  "description": "Astryon WebSocket Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,7 +10,7 @@
   "keywords": [
     "websocket",
     "collaboration",
-    "aurora"
+    "astryon"
   ],
   "author": "",
   "license": "ISC",

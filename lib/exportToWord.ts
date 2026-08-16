@@ -202,7 +202,7 @@ export async function exportToWord(data: ExportData) {
           size: 20
         }),
         new TextRun({
-          text: 'Aurora Portal',
+          text: 'Astryon Portal',
           size: 20,
           bold: true,
           color: '00FFD4'

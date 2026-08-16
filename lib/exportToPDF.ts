@@ -316,7 +316,7 @@ export function exportToPDF(data: ExportData) {
   );
   yPosition += 6;
   doc.text(
-    '🤖 Generated with Aurora Portal',
+    '🤖 Generated with Astryon Portal',
     marginLeft,
     yPosition
   );
