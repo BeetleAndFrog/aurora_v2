@@ -1,3 +1,4 @@
+import { PHASE_PRODUCTION_BUILD } from "next/constants";
 import type { NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import EmailProvider from "next-auth/providers/email";
@@ -91,9 +92,19 @@ const REQUIRED_PRODUCTION_ENV = [
  * Throws with a redacted, name-only message (no secret values) when any
  * required environment variable is missing. In development, missing values
  * are tolerated so local auth can be exercised without a full secret set.
+ *
+ * Also tolerated during `next build`: Next.js imports this route module to
+ * collect page data/config even though the handler never actually runs, and
+ * `NODE_ENV` is "production" at that point. Runtime secrets (e.g. a
+ * database URL) are not always present in the build environment, so
+ * skipping here avoids failing builds for a check that only matters once
+ * the function is actually invoked to serve a request.
  */
 export function assertAuthEnv(): void {
   if (process.env.NODE_ENV !== "production") {
+    return;
+  }
+  if (process.env.NEXT_PHASE === PHASE_PRODUCTION_BUILD) {
     return;
   }
   const missing = REQUIRED_PRODUCTION_ENV.filter(
